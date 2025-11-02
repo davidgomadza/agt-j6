@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AGT Wallet — J6 Issuer (Demo)</title>
+
+  <!-- Ethers v5 UMD (keeps APIs used in this file stable) -->
+  <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#0b0b14; --card:#141426; --accent:#6a5af9; --text:#e6e6ff; --muted:#9aa0cc;
+      --danger:#ff6666;
+    }
+    body{background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,system-ui,Arial;padding:18px;margin:0}
+    .wrap{max-width:1100px;margin:18px auto;background:linear-gradient(180deg,#0f1224, #0b0b14);padding:20px;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,.6)}
+    h1{color:var(--accent);margin:0 0 8px}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .card{background:var(--card);padding:14px;border-radius:10px;margin-top:12px}
+    input,select,textarea{padding:10px;border-radius:8px;border:1px solid #1e2440;background:#0d1224;color:var(--text);min-width:0}
+    button{background:var(--accent);border:none;color:white;padding:10px 14px;border-radius:8px;cursor:pointer}
+    .muted{color:var(--muted);font-size:13px}
+    .result{background:#071024;padding:12px;border-radius:8px;margin-top:10px;font-family:monospace;white-space:pre-wrap}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #121222;text-align:left;font-size:13px}
+    th{color:var(--accent)}
+    .warning{background:rgba(255,102,102,0.08);padding:8px;border-radius:8px;color:var(--danger);margin-bottom:12px}
+    .success{color:#7FFFD4}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🔐 AGT Wallet — J6 Issuer (Demo)</h1>
+    <div class="muted">Deterministic J6 labels (52 chars) → underlying Ethereum addresses (HD derivation). Demo token balances stored locally. Use with caution.</div>
+
+    <div class="warning">
+      <strong>Security notice:</strong> This HTML embeds an Alchemy API key client-side (as requested). That key is publicly visible in the page source and may be used by anyone. <strong>Please rotate the key in Alchemy immediately after deploying.</strong>
+    </div>
+
+    <!-- Config / Alchemy -->
+    <div class="card">
+      <h3>Network & Provider</h3>
+      <div class="row">
+        <label class="muted">Alchemy key (embedded):</label>
+        <input id="alchemyKey" style="min-width:360px" />
+        <button id="btnApplyKey">Apply Key</button>
+      </div>
+      <div class="muted" style="margin-top:8px">Network: Polygon Mumbai (maticmum). If you want mainnet or other chain, change provider code carefully.</div>
+    </div>
+
+    <!-- Create / Import -->
+    <div class="card">
+      <h3>Create / Import Master Wallet</h3>
+      <div class="row" style="margin-bottom:8px">
+        <button id="btnCreate">Generate New Master Mnemonic</button>
+        <button id="btnImport">Import Recovery Phrase</button>
+        <button id="btnClear">Clear Local Mappings</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1">
+          <label class="muted">Master mnemonic (stored encrypted if you use 'Encrypt' below)</label>
+          <textarea id="masterMnemonic" rows="2" placeholder="Master mnemonic shows here (hidden until created/imported)" style="width:100%"></textarea>
+        </div>
+        <div style="width:220px">
+          <label class="muted">Password (optional - encrypt local storage)</label>
+          <input id="storagePassword" type="password" placeholder="encryption password" style="width:100%" />
+          <button id="btnEncrypt" style="margin-top:8px;width:100%">Encrypt & Save</button>
+        </div>
+      </div>
+      <div id="createResult" class="result">No master wallet yet.</div>
+    </div>
+
+    <!-- Derive / Issue -->
+    <div class="card">
+      <h3>Derive / Issue J6 Wallets</h3>
+      <div class="row" style="margin-bottom:10px">
+        <label class="muted">Start index</label>
+        <input id="startIndex" type="number" value="0" style="width:120px" />
+        <label class="muted">Count</label>
+        <input id="count" type="number" value="10" style="width:120px" />
+        <button id="btnIssue">Derive / Issue</button>
+        <button id="btnExportMap">Export Mapping JSON</button>
+      </div>
+      <div class="muted">Important: do not attempt to derive extremely large counts in one click — set reasonable batch sizes (e.g., 1000) to avoid browser slowdown. Hard cap is enforced.</div>
+      <div id="issueResult" class="result">No derivations yet.</div>
+    </div>
+
+    <!-- Mappings -->
+    <div class="card">
+      <h3>Local J6 → 0x Mappings</h3>
+      <div class="muted">Mappings are stored in localStorage (optionally encrypted). You can export and import backups.</div>
+      <div style="margin-top:8px" class="row">
+        <button id="btnShowMap">Show Local Map (paginated)</button>
+        <input id="mapPageSize" type="number" value="50" style="width:120px" />
+      </div>
+      <div id="mapResult" class="result">Map not shown.</div>
+    </div>
+
+    <!-- Tokens -->
+    <div class="card">
+      <h3>Token Set (demo balances attached to each derived J6)</h3>
+      <table>
+        <thead><tr><th>Token</th><th>Symbol</th><th>Initial (demo)</th></tr></thead>
+        <tbody id="tokenTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+/* ============================
+   Configuration & Embedded Key
+   ============================ */
+
+/*
+  Per your request, the Alchemy API key you provided is embedded below.
+  WARNING: This key will be visible to anyone who views the page source.
+  Please rotate/revoke in Alchemy after deploying.
+*/
+const EMBEDDED_ALCHEMY_KEY = 'g3gV2uw-5EQVL6XucJudv'; // <--- your key (as requested)
+
+const NETWORK = 'maticmum'; // Polygon Mumbai testnet (ethers v5 provider zone)
+const ALCHEMY_KEY_INPUT = document.getElementById('alchemyKey');
+ALCHEMY_KEY_INPUT.value = EMBEDDED_ALCHEMY_KEY;
+
+let ALCHEMY_KEY = EMBEDDED_ALCHEMY_KEY; // active key (can be updated via UI)
+let provider = new ethers.providers.AlchemyProvider(NETWORK, ALCHEMY_KEY);
+
+/* ============================
+   Token definitions (user provided)
+   ============================ */
+const TOKENS = [
+  { name: "Advanced Genetic Synthesis Technology", symbol: "AGT", initial: "37867890284" },
+  { name: "Sealofapprovalis7628396t' S96t'", symbol: "S96t'", initial: "37867890284" },
+  { name: "Bitcoinayt", symbol: "BTCYT", initial: "37867890284" },
+  { name: "Bitcoin", symbol: "BTC", initial: "37867890284" },
+  { name: "Global Transaction Payment Solution", symbol: "GTPS", initial: "37867890284" },
+  { name: "AGT Gold", symbol: "AGOLD", initial: "37867890284" }
+];
+
+// Populate token table
+const tokenTable = document.getElementById('tokenTable');
+TOKENS.forEach(t => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${t.name}</td><td>${t.symbol}</td><td>${t.initial}${t.symbol}</td>`;
+  tokenTable.appendChild(tr);
+});
+
+/* ============================
+   Local storage keys & state
+   ============================ */
+const STORAGE_KEY_ENC = 'agtwallet_v2_encrypted_blob';
+const STORAGE_KEY_PLAIN = 'agtwallet_v2_plain';
+const J6_MAP_KEY = 'agtwallet_v2_j6map'; // stores JSON mapping label -> {address, index, tokens}
+
+// In-memory working state
+let state = {
+  mnemonic: null,
+  j6Map: loadJ6MapFromStorage() // object mapping J6 -> {address, index, tokens}
+};
+
+/* ============================
+   Crypto helpers (Web Crypto)
+   ============================ */
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function hexToUint8(hex) {
+  if (hex.startsWith('0x')) hex = hex.slice(2);
+  if (hex.length % 2 === 1) hex = '0' + hex;
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) bytes[i/2] = parseInt(hex.substr(i,2),16);
+  return bytes;
+}
+function uint8ToHex(u8) {
+  return Array.from(u8).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+function randHex(bytes=16) {
+  const a = crypto.getRandomValues(new Uint8Array(bytes));
+  return uint8ToHex(a);
+}
+
+async function deriveAESKey(password, saltHex, iterations = 150000) {
+  const salt = hexToUint8(saltHex);
+  const baseKey = await crypto.subtle.importKey('raw', encoder.encode(password), {name:'PBKDF2'}, false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations, hash:'SHA-256'}, baseKey, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']);
+  return key;
+}
+
+async function encryptJSON(obj, password) {
+  const salt = randHex(16);
+  const iv = randHex(12);
+  const key = await deriveAESKey(password, salt);
+  const plaintext = encoder.encode(JSON.stringify(obj));
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv:hexToUint8(iv)}, key, plaintext);
+  return { salt, iv, ciphertext: uint8ToHex(new Uint8Array(ct)) };
+}
+async function decryptJSON(enc, password) {
+  const key = await deriveAESKey(password, enc.salt);
+  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:hexToUint8(enc.iv)}, key, hexToUint8(enc.ciphertext));
+  return JSON.parse(decoder.decode(pt));
+}
+
+/* ============================
+   J6 generation & derivation
+   ============================ */
+
+// small base62-like alphabet for labels (50 chars tail)
+const ALPH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+// convert bytes (hex) to base62-ish string
+function keccakToBase62(hex, len) {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  let out = '';
+  let pos = 0;
+  while (out.length < len) {
+    const slice = clean.slice((pos*8) % clean.length, ((pos*8) % clean.length) + 8);
+    const val = parseInt(slice || clean.slice(0,8), 16);
+    out += ALPH[val % ALPH.length];
+    pos++;
+  }
+  return out;
+}
+
+// create deterministic J6 label from mnemonic + index
+function makeJ6Label(mnemonic, index) {
+  const blob = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(`${mnemonic}::${index}`));
+  const tail = keccakToBase62(blob, 50);
+  return 'J6' + tail;
+}
+
+// derive Ethereum address from mnemonic + index using HD path m/44'/60'/0'/0/index
+function ethAddressFromMnemonic(mnemonic, index) {
+  const hd = ethers.utils.HDNode.fromMnemonic(mnemonic).derivePath(`m/44'/60'/0'/0/${index}`);
+  return hd.address;
+}
+
+/* ============================
+   Storage helpers
+   ============================ */
+function loadJ6MapFromStorage() {
+  try {
+    const raw = localStorage.getItem(J6_MAP_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (e) { return {}; }
+}
+function saveJ6MapToStorage(map) {
+  localStorage.setItem(J6_MAP_KEY, JSON.stringify(map));
+}
+
+/* ============================
+   UI wiring
+   ============================ */
+
+document.getElementById('btnApplyKey').addEventListener('click', () => {
+  const v = document.getElementById('alchemyKey').value.trim();
+  if (!v) return alert('Provide an Alchemy key');
+  ALCHEMY_KEY = v;
+  provider = new ethers.providers.AlchemyProvider(NETWORK, ALCHEMY_KEY);
+  alert('Alchemy key applied. Provider updated.');
+});
+
+// Create new master mnemonic
+document.getElementById('btnCreate').addEventListener('click', async () => {
+  try {
+    const w = ethers.Wallet.createRandom();
+    const mnemonic = w.mnemonic && w.mnemonic.phrase ? w.mnemonic.phrase : null;
+    if (!mnemonic) return alert('Failed to create mnemonic (unexpected)');
+    state.mnemonic = mnemonic;
+    document.getElementById('masterMnemonic').value = mnemonic;
+    document.getElementById('createResult').innerText = `Master mnemonic created. (Keep it safe.)`;
+  } catch (e) {
+    document.getElementById('createResult').innerText = 'Error: ' + e.message;
+  }
+});
+
+// Import mnemonic
+document.getElementById('btnImport').addEventListener('click', async () => {
+  const phrase = prompt('Paste your 12/24-word recovery phrase:');
+  if (!phrase) return;
+  try {
+    ethers.utils.HDNode.fromMnemonic(phrase); // validate
+    state.mnemonic = phrase;
+    document.getElementById('masterMnemonic').value = '*** mnemonic loaded (hidden) ***';
+    document.getElementById('createResult').innerText = 'Master mnemonic imported. Use Derive to issue J6 wallets.';
+  } catch (e) {
+    alert('Invalid mnemonic: ' + (e.message||e));
+  }
+});
+
+// Clear local mappings (danger)
+document.getElementById('btnClear').addEventListener('click', () => {
+  if (!confirm('Clear local J6 mappings and in-memory mnemonic? This cannot be undone.')) return;
+  localStorage.removeItem(J6_MAP_KEY);
+  localStorage.removeItem(STORAGE_KEY_ENC);
+  localStorage.removeItem(STORAGE_KEY_PLAIN);
+  state = { mnemonic: null, j6Map: {} };
+  document.getElementById('createResult').innerText = 'Cleared local storage.';
+  document.getElementById('mapResult').innerText = 'Map cleared.';
+});
+
+// Encrypt & Save master mnemonic + j6Map using provided password
+document.getElementById('btnEncrypt').addEventListener('click', async () => {
+  const pw = document.getElementById('storagePassword').value;
+  if (!pw) return alert('Enter a password to encrypt local storage.');
+  if (!state.mnemonic) return alert('No master mnemonic in memory. Create or import first.');
+  try {
+    const blob = { mnemonic: state.mnemonic, j6Map: state.j6Map || {} };
+    const enc = await encryptJSON(blob, pw);
+    localStorage.setItem(STORAGE_KEY_ENC, JSON.stringify(enc));
+    // remove plain storage
+    localStorage.removeItem(STORAGE_KEY_PLAIN);
+    document.getElementById('createResult').innerText = 'Encrypted master + mappings saved in localStorage.';
+  } catch (e) {
+    document.getElementById('createResult').innerText = 'Encryption failed: ' + e.message;
+  }
+});
+
+/* ============================
+   Issue / Derive wallets (batch)
+   ============================ */
+
+// Hard safety cap to avoid browser freeze — user can increase if they know what they're doing
+const HARD_CAP = 100000; // deriving more than this in one go is blocked
+
+document.getElementById('btnIssue').addEventListener('click', async () => {
+  try {
+    const start = parseInt(document.getElementById('startIndex').value || '0', 10);
+    const count = parseInt(document.getElementById('count').value || '1', 10);
+    if (isNaN(start) || isNaN(count) || start < 0 || count <= 0) return alert('Enter valid start/index counts.');
+    if (count > HARD_CAP) return alert('Count too large. Hard cap is ' + HARD_CAP + '. Generate in smaller batches.');
+    if (!state.mnemonic) return alert('No master mnemonic loaded. Create or import first.');
+
+    const map = state.j6Map || {};
+    const startedAt = Date.now();
+    let progress = 0;
+    document.getElementById('issueResult').innerText = `Deriving ${count} wallets starting at index ${start} ...`;
+
+    // batch loop; derive and save periodically
+    const BATCH_SAVE = 500;
+    for (let i = 0; i < count; i++) {
+      const idx = start + i;
+      const label = makeJ6Label(state.mnemonic, idx);
+      if (!map[label]) {
+        const addr = ethAddressFromMnemonic(state.mnemonic, idx);
+        // attach demo tokens (strings)
+        const tokens = {};
+        for (const t of TOKENS) tokens[t.symbol] = t.initial;
+        map[label] = { address: addr, index: idx, tokens };
+      }
+      progress++;
+      if (progress % 50 === 0) {
+        document.getElementById('issueResult').innerText = `Derived ${progress}/${count}... (last: ${label})`;
+        // yield to UI thread
+        await new Promise(r => setTimeout(r, 12));
+      }
+      if (progress % BATCH_SAVE === 0) {
+        saveJ6MapToStorage(map);
+      }
+    }
+    saveJ6MapToStorage(map);
+    state.j6Map = map;
+    const took = ((Date.now() - startedAt)/1000).toFixed(2);
+    document.getElementById('issueResult').innerText = `Done: Derived ${count} wallets from index ${start} in ${took}s. Last label: ${Object.keys(map).slice(-1)[0]}`;
+  } catch (e) {
+    document.getElementById('issueResult').innerText = 'Derivation failed: ' + (e.message||e);
+  }
+});
+
+/* ============================
+   Show local map (paginated)
+   ============================ */
+document.getElementById('btnShowMap').addEventListener('click', () => {
+  const map = state.j6Map || loadJ6MapFromStorage();
+  const pageSize = Math.max(10, parseInt(document.getElementById('mapPageSize').value || '50',10));
+  const labels = Object.keys(map).sort();
+  if (!labels.length) { document.getElementById('mapResult').innerText = 'No mappings stored locally.'; return; }
+
+  // display first page
+  const pageCount = Math.ceil(labels.length / pageSize);
+  let out = `Total mappings: ${labels.length} (showing first ${pageSize}).\n\n`;
+  for (let i = 0; i < Math.min(pageSize, labels.length); i++) {
+    const lbl = labels[i];
+    const rec = map[lbl];
+    out += `${i+1}. ${lbl} -> ${rec.address} (index ${rec.index})\n   tokens: ${JSON.stringify(rec.tokens)}\n`;
+  }
+  out += `\nPage 1 of ${pageCount}. Use export to download full mapping.`;
+  document.getElementById('mapResult').innerText = out;
+});
+
+/* ============================
+   Export mapping to JSON
+   ============================ */
+document.getElementById('btnExportMap').addEventListener('click', () => {
+  const map = state.j6Map || loadJ6MapFromStorage();
+  const blob = new Blob([JSON.stringify(map, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'j6_mappings.json'; document.body.appendChild(a); a.click();
+  a.remove(); URL.revokeObjectURL(url);
+});
+
+/* ============================
+   Helpers & initial load
+   ============================ */
+function loadJ6MapFromStorage() {
+  try {
+    const raw = localStorage.getItem(J6_MAP_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (e) { return {}; }
+}
+function saveJ6MapToStorage(map) {
+  localStorage.setItem(J6_MAP_KEY, JSON.stringify(map));
+}
+
+/* On load: apply embedded key to provider */
+window.addEventListener('load', () => {
+  document.getElementById('alchemyKey').value = EMBEDDED_ALCHEMY_KEY;
+  provider = new ethers.providers.AlchemyProvider(NETWORK, EMBEDDED_ALCHEMY_KEY);
+  const localMap = loadJ6MapFromStorage();
+  if (Object.keys(localMap).length) {
+    state.j6Map = localMap;
+    document.getElementById('createResult').innerText = `Loaded ${Object.keys(localMap).length} local mappings.`;
+  }
+});
+</script>
+</body>
+</html>
